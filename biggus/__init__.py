@@ -330,10 +330,14 @@ class NdarrayNode(ConsumerNode):
     """
 
     def __init__(self, array, masked):
+        shape = array.shape
+        if np.inf in shape:
+            raise MemoryError("An infinite array cannot be created - you "
+                              "don't have enough memory.")
         if masked:
-            self.result = np.ma.empty(array.shape, dtype=array.dtype)
+            self.result = np.ma.empty(shape, dtype=array.dtype)
         else:
-            self.result = np.empty(array.shape, dtype=array.dtype)
+            self.result = np.empty(shape, dtype=array.dtype)
         super(NdarrayNode, self).__init__()
 
     def abort(self):
@@ -515,6 +519,9 @@ class Array(object):
     @property
     def nbytes(self):
         """The total number of bytes required to store the array data."""
+        shape = self.shape
+        if np.inf in shape:
+            return np.inf
         return int(np.product(self.shape) * self.dtype.itemsize)
 
     @property
@@ -903,7 +910,10 @@ class BroadcastArray(ArrayContainer):
                     array_keys.append(slice(None))
 
                     # TODO: Compute this without creating a range object.
-                    size = len(range(*key.indices(existing_size)))
+                    if np.isinf(existing_size):
+                        size = 1 #np.inf
+                    else:
+                        size = len(range(*key.indices(existing_size)))
                     new_broadcast_dict[concrete_axis - n_axes_removed] = size
                 elif _is_scalar(key):
                     if not -existing_size <= key < existing_size:
@@ -2990,6 +3000,8 @@ def size(array):
         size = '{:.02f} MiB'.format(nbytes / (1 << 20))
     elif nbytes < (1 << 40):
         size = '{:.02f} GiB'.format(nbytes / (1 << 30))
+    elif np.isinf(nbytes):
+        size = 'inf bytes'
     else:
         size = '{:.02f} TiB'.format(nbytes / (1 << 40))
     return size
