@@ -6,6 +6,7 @@ class Integers(biggus.Array):
     def __init__(self, start=0, step=1):
         super(Integers, self).__init__()
         self.start = start
+        self.step = step
 
     @property
     def shape(self):
@@ -32,16 +33,27 @@ class Integers(biggus.Array):
             raise IndexError('Unexpected keys when indexing')
         key = keys[0]
         if isinstance(key, slice):
-            if key == slice(None):
-                return self
+            # TODO: Worry about [::-1]
+            start = (key.start or 0) + self.start
+            step = (key.step or 1) * self.step
+
+            stop = key.stop
+            if stop is None:
+                # We maintain an infinite sequence.
+                return Integers(start, step)
             else:
-                start = key.start or 0
-                if key.stop is None:
-                    return Integers(start + self.start)
-                else:
-                    return np.arange(start + self.start,
-                                     key.stop + self.start,
-                                     key.step)
+                # We know how long the sequence should be.
+                return np.arange(start, stop + self.start, step)
+
+#            if key == slice(None):
+#                return self
+#            else:
+#                if key.stop is None:
+#                    return Integers(start + self.start)
+#                else:
+#                    return np.arange(start + self.start,
+#                                     key.stop + self.start,
+#                                     key.step)
         elif biggus._is_scalar(key):
             if key < 0:
                 raise IndexError('Cannot index an infinite sequence with a '
@@ -62,7 +74,10 @@ print a[0:10], a[0], a[10]
 
 print a[1:]
 
-print (a[1:] + a)[:10].ndarray()
+print (a[1:] - a)[:10].ndarray()
+
+
+
 
 if False:
     x = a[np.newaxis, :]
