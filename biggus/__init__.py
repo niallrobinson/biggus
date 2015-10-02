@@ -1630,6 +1630,121 @@ class TransposedArray(ArrayContainer):
         return array.transpose(self.axes)
 
 
+class Rationals(Array):
+    """
+    Represents a, possibliy infinite, equally spaced sequence of 
+    rational numbers.
+
+    """
+    def __init__(self, start=0, step=1, count=np.inf, dtype=None):
+        """
+        Parameters
+        ----------
+        start
+            The number from which to start the sequence. Default is 0.
+        step
+            The number to increment between each number in the sequence.
+            Default is 1.
+        count
+            The number of numbers in the sequence. Default is np.inf.
+        dtype - np.dtype (optional)
+            The datatype of the sequence. If not specified, the dtype will
+            be inferred from the start and step dtypes.
+        """
+        super(Rationals, self).__init__()
+        if dtype is None:
+            dtype = np.find_common_type([], [np.array(start).dtype,
+                                             np.array(step).dtype])
+        self.start = start
+        self.step = step
+        self.count = count
+        self._dtype = dtype
+
+    @property
+    def stop(self):
+        return self.start + self.step * self.count
+
+    @property
+    def shape(self):
+        return (self.count, )
+
+    @property
+    def dtype(self):
+        return self._dtype
+
+    @property
+    def nbytes(self):
+        """The total number of bytes required to store the array data."""
+        return self.count * self.dtype.itemsize
+
+    def ndarray(self):
+        if np.isinf(self.count):
+            raise MemoryError("Could not realise the Rationals array - it has"
+                              " infinite length, for which you don't have "
+                              "enough memory.")
+        return np.arange(self.start, self.stop, self.step)
+
+    def masked_array(self):
+        return np.ma.masked_array(self.ndarray())
+
+    def _getitem_full_keys(self, keys):
+        # TODO: Prevent negative indexes being interpreted.
+        if len(keys) != 1:
+            raise IndexError('Unexpected keys when indexing ().'.format(keys))
+        key = keys[0]
+
+        if isinstance(key, slice):
+            # TODO: Worry about [::-1]
+            start = (key.start or 0) + self.start
+            step = (key.step or 1) * self.step
+
+            # The slice stop is an index, not a value, so stop is really count.
+            count = key.stop
+            if np.isinf(self.count):
+                if count is None:
+                    # Preserve infinite length.
+                    pass
+                else:
+                    # Just use key.stop as our new count
+                    pass
+            else:
+                if count is None:
+                    # Finite array, infinite request.
+                    count = self.count
+                elif count < 0:
+                    # Finite array, finite request.
+                    count = self.count + count
+                else:
+                    count = count
+
+            # We know how long the sequence should be.
+            dtype = np.find_common_type([], [np.array(start).dtype,
+                                             np.array(step).dtype,
+                                             np.array(count or 0).dtype,
+                                             self.dtype])
+            if count is None:
+                # We maintain an infinite sequence.
+                return Rationals(start, step, dtype=dtype)
+            else:
+                if count < 0 and np.isinf(self.count):
+                        raise IndexError('Negative indexing for infinite arrays not supported.')
+
+                return Rationals(start, step, count, dtype=dtype)
+        elif _is_scalar(key):
+            if key < 0:
+                if np.isinf(self.count):
+                    raise IndexError('Cannot index an infinite sequence with a '
+                                     'negative index.')
+                else:
+                    key = self.count + key
+            return key * self.step + self.start
+        else:
+            raise IndexError('Unsupported key ({}) for indexing.'.format(type(key)))
+
+    @classmethod
+    def arange(cls, start=0, stop=None, step=None):
+
+
 class ArrayStack(Array):
     """
     An Array made from a homogeneous array of other Arrays.

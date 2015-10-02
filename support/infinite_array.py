@@ -2,36 +2,47 @@ import biggus
 import numpy as np
 
 
-class Integers(biggus.Array):
-    def __init__(self, start=0, step=1):
-        super(Integers, self).__init__()
+class Rationals(biggus.Array):
+    def __init__(self, start=0, step=1, count=np.inf, dtype=None):
+        super(Rationals, self).__init__()
+        if dtype is None:
+            dtype = np.find_common_type([], [np.array(start).dtype,
+                                             np.array(step).dtype,
+                                             np.array(count).dtype])
         self.start = start
         self.step = step
+        self.count = count
+        self._dtype = dtype
 
     @property
     def shape(self):
-        return (np.inf, )
+        return (self.count, )
 
     @property
     def dtype(self):
-        return np.int32
+        return self._dtype
 
     @property
     def nbytes(self):
         """The total number of bytes required to store the array data."""
-        return np.inf
+        return self.count * self.dtype.itemsize
 
     def ndarray(self):
-        raise MemoryError('You have infinite memory, huh?')
+        if np.isinf(self.count):
+            raise MemoryError("Could not realise the Rationals array - it has"
+                              "infinite length, for which you don't have "
+                              "enough memory.")
+        
 
     def masked_array(self):
-        raise MemoryError('You have infinite memory, huh?')
+        return np.ma.masked_array(self.ndarray())
 
     def _getitem_full_keys(self, keys):
         # TODO: Prevent negative indexes being interpreted.
         if len(keys) != 1:
-            raise IndexError('Unexpected keys when indexing')
+            raise IndexError('Unexpected keys when indexing ().'.format(keys))
         key = keys[0]
+
         if isinstance(key, slice):
             # TODO: Worry about [::-1]
             start = (key.start or 0) + self.start
@@ -40,20 +51,10 @@ class Integers(biggus.Array):
             stop = key.stop
             if stop is None:
                 # We maintain an infinite sequence.
-                return Integers(start, step)
+                return Rationals(start, step)
             else:
                 # We know how long the sequence should be.
-                return np.arange(start, stop + self.start, step)
-
-#            if key == slice(None):
-#                return self
-#            else:
-#                if key.stop is None:
-#                    return Integers(start + self.start)
-#                else:
-#                    return np.arange(start + self.start,
-#                                     key.stop + self.start,
-#                                     key.step)
+                return np.arange(start, stop + self.start, step, dtype=self.dtype)
         elif biggus._is_scalar(key):
             if key < 0:
                 raise IndexError('Cannot index an infinite sequence with a '
@@ -63,8 +64,8 @@ class Integers(biggus.Array):
             raise IndexError('Unsupported key ({}) for indexing.'.format(type(key)))
 
 
-non_negative = Integers(0)
-natural = Integers(1)
+non_negative = Rationals(0)
+natural = Rationals(1)
 
 a = non_negative
 
@@ -79,7 +80,7 @@ print (a[1:] - a)[:10].ndarray()
 
 
 
-if False:
+if True:
     x = a[np.newaxis, :]
     print type(x)
     print x.shape
