@@ -46,6 +46,10 @@ class Test_attributes(unittest.TestCase):
         array = Rationals()
         self.assertEqual(array.shape, (np.inf, ))
 
+    def test_shape_integers(self):
+        array = Rationals(0, 10, 4.)
+        self.assertIsInstance(array.shape[0], int)
+
     def test_stop_positive_inf(self):
         array = Rationals()
         self.assertEqual(array.stop, np.inf)
@@ -158,13 +162,6 @@ class Test___getitem__(unittest.TestCase):
         msg = 'Cannot index an infinite sequence with a negative index'
         with self.assertRaisesRegexp(IndexError, msg):
             array[-1]
-
-
-class Test_Rationals_arange(unittest.TestCase):
-    def test_no_args(self):
-        array = Rationals.arange()
-        
-
 
 
 if __name__ == '__main__':

@@ -1666,7 +1666,11 @@ class Rationals(Array):
 
     @property
     def shape(self):
-        return (self.count, )
+        if np.isinf(self.count):
+            shape = (self.count, )
+        else:
+            shape = (int(self.count), )
+        return shape
 
     @property
     def dtype(self):
@@ -1741,8 +1745,34 @@ class Rationals(Array):
         else:
             raise IndexError('Unsupported key ({}) for indexing.'.format(type(key)))
 
-    @classmethod
-    def arange(cls, start=0, stop=None, step=None):
+
+def arange(start=None, stop=None, step=1, dtype=None):
+    """
+    Return evenly spaced values within a given interval.
+
+    [start, ]stop, [step, ]
+
+    """
+    count = None
+    if stop is None:
+        if start is None:
+            # No arguments
+            start = 0
+            stop = 1
+            count = np.inf
+        else:
+            # Handle arange's stop only argument semantics.
+            stop = start
+            start = 0
+
+    if count is None:
+        count = (stop - start) / step
+
+    if dtype is None:
+        dtype = np.find_common_type([], [np.array(start).dtype,
+                                         np.array(stop).dtype])
+
+    return Rationals(start, step, count, dtype=dtype)
 
 
 class ArrayStack(Array):
