@@ -20,7 +20,6 @@ from __future__ import division
 import unittest
 
 import numpy as np
-from numpy.testing import assert_array_equal
 
 from biggus import arange
 
@@ -36,6 +35,14 @@ class Test_arange(unittest.TestCase):
     def test_no_args_dtype(self):
         a = arange(dtype='int16')
         self.assertEqual(a.dtype, np.dtype('int16'))
+
+    def test_no_args_step_defined(self):
+        a = arange(step=0.5)
+        self.assertEqual(a.start, 0)
+        self.assertEqual(a.step, 0.5)
+        self.assertEqual(a.count, np.inf)
+        self.assertEqual(list(a[:4].ndarray()), [0.0, 0.5, 1.0, 1.5])
+        self.assertEqual(a.dtype, np.dtype('float64'))
 
     def test_one_arg(self):
         a = arange(10)

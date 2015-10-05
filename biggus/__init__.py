@@ -1770,9 +1770,28 @@ def arange(start=None, stop=None, step=1, dtype=None):
 
     if dtype is None:
         dtype = np.find_common_type([], [np.array(start).dtype,
-                                         np.array(stop).dtype])
+                                         np.array(stop).dtype,
+                                         np.array(step).dtype])
 
     return Rationals(start, step, count, dtype=dtype)
+
+
+def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None):
+    """Return evenly spaced numbers over a specified interval."""
+    if endpoint:
+        step = (stop - start) / (num - 1)
+    else:
+        step = (stop - start) / num
+
+    if dtype is None:
+        dtype = np.array(step).dtype
+
+    arr = Rationals(start, step, num, dtype=dtype)
+
+    if retstep:
+        return arr, step
+    else:
+        return arr
 
 
 class ArrayStack(Array):
