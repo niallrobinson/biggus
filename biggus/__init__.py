@@ -838,7 +838,7 @@ class NewAxesArray(ArrayContainer):
                     new_size = len(range(*key.indices(1)))
                     if new_size != 1:
                         broadcast_dict[key_index] = new_size
-                elif isinstance(key, tuple):
+                elif isinstance(key, (tuple, np.ndarray)):
                     for index in key:
                         if not -1 <= index < 1:
                             raise IndexError('index {} is out of bounds for '
@@ -2986,6 +2986,10 @@ def _full_keys(keys, ndim):
         if next_key is Ellipsis:
             next_key = slice(None)
             take_from_left = not take_from_left
+
+        if isinstance(next_key, tuple):
+            next_key = np.array(next_key)
+
         keys_list.append(next_key)
 
     middle = [slice(None)] * (ndim - n_keys_non_newaxis)

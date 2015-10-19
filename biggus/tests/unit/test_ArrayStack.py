@@ -19,6 +19,7 @@
 import unittest
 
 import numpy as np
+from numpy.testing import assert_array_equal
 
 from biggus import Array, ArrayStack, NumpyArrayAdapter, ConstantArray
 from biggus.tests import mock
@@ -165,8 +166,8 @@ class Test___getitem__(unittest.TestCase):
     # Currently they only handle the newaxis checking.
     # There are more tests in biggus.tests.test_stack.
     def setUp(self):
-        self.a1 = ConstantArray([4, 3])
-        self.a2 = ConstantArray([4, 3])
+        self.a1 = ConstantArray([4, 3], 0)
+        self.a2 = ConstantArray([4, 3], 1)
         self.a = ArrayStack([self.a1, self.a2])
 
     def test_newaxis_leading(self):
@@ -174,6 +175,11 @@ class Test___getitem__(unittest.TestCase):
 
     def test_newaxis_trailing(self):
         self.assertEqual(self.a[..., np.newaxis].shape, (2, 4, 3, 1))
+
+    def test_tuple_indexing(self):
+        # In numpy <=1.8 this would fail if the tuple isn't cast to a np.array
+        assert_array_equal(self.a[((1, 0, 1),)].shape, (3, 4, 3))
+        assert_array_equal(self.a[(1, 0, 1), 0, 0].ndarray(), (1, 0, 1))
 
 
 if __name__ == '__main__':
