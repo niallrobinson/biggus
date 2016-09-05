@@ -70,6 +70,9 @@ class _KeyGen(object):
 #: An object that can be indexed to return a usable key.
 key_gen = _KeyGen()
 
+import biggus.dask_engine
+biggus.engine = biggus.dask_engine.DaskEngine()
+
 
 @contextmanager
 def set_chunk_size(value):

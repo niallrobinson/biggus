@@ -152,6 +152,26 @@ class ProducerNode(Node):
         self.masked = masked
         super(ProducerNode, self).__init__()
 
+    def chunk_index_gen(self):
+        # We always slice up the Array into the same chunks, but
+        # the order that we traverse those chunks depends on
+        # `self.iteration_order`.
+        # We use `numpy.ndindex` to iterate through all the chunks,
+        # but since it always iterates over the last dimension first
+        # we have to transpose `all_cuts` and `cut_shape` ourselves.
+        # Then we have to invert the transposition once we have
+        # identified the relevant slices.
+        all_cuts = _all_slices_inner(self.array.shape,
+                                     always_slices=True)
+        all_cuts = [all_cuts[i] for i in self.iteration_order]
+        cut_shape = tuple(len(cuts) for cuts in all_cuts)
+        inverse_order = [self.iteration_order.index(i) for
+                         i in range(len(self.iteration_order))]
+        for cut_indices in np.ndindex(*cut_shape):
+            key = tuple(cuts[i] for cuts, i in zip(all_cuts, cut_indices))
+            key = tuple(key[i] for i in inverse_order)
+            yield key
+
     def run(self):
         """
         Emit the Chunk instances which cover the underlying Array.
@@ -162,23 +182,7 @@ class ProducerNode(Node):
 
         """
         try:
-            # We always slice up the Array into the same chunks, but
-            # the order that we traverse those chunks depends on
-            # `self.iteration_order`.
-            # We use `numpy.ndindex` to iterate through all the chunks,
-            # but since it always iterates over the last dimension first
-            # we have to transpose `all_cuts` and `cut_shape` ourselves.
-            # Then we have to invert the transposition once we have
-            # indentified the relevant slices.
-            all_cuts = _all_slices_inner(self.array.shape,
-                                         always_slices=True)
-            all_cuts = [all_cuts[i] for i in self.iteration_order]
-            cut_shape = tuple(len(cuts) for cuts in all_cuts)
-            inverse_order = [self.iteration_order.index(i) for
-                             i in range(len(self.iteration_order))]
-            for cut_indices in np.ndindex(*cut_shape):
-                key = tuple(cuts[i] for cuts, i in zip(all_cuts, cut_indices))
-                key = tuple(key[i] for i in inverse_order)
+            for key in self.chunk_index_gen():
                 # Now we have the slices that describe the next chunk.
                 # For example, key might be equivalent to
                 # `[11:12, 0:3, :, :]`.
