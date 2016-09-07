@@ -4,8 +4,14 @@ import biggus._init
 import numpy as np
 
 
-def ider(array):
-    return 'id_{}'.format(str(id(array)))
+def ider(input):
+    if isinstance(input, biggus._init.Chunk):
+        result = 'chunk {} <{}>'.format(input.shape, id(input))
+    elif isinstance(input, biggus._init.Array):
+        result = 'array {} <{}>'.format(input.shape, id(input))
+    else:
+        result = 'id_{}'.format(id(input))
+    return result
 
 
 class DaskGroup(AllThreadedEngine.Group):
@@ -14,7 +20,7 @@ class DaskGroup(AllThreadedEngine.Group):
         self._node_cache = {}
 
     def _make_nodes(self, dsk_graph, array, iteration_order, masked, top=False):
-        cache_key = id(array)
+        cache_key = ider(array)
         nodes = self._node_cache.get(cache_key, None)
         if nodes is None:
             nodes = {}
@@ -27,51 +33,56 @@ class DaskGroup(AllThreadedEngine.Group):
                     self._make_nodes(dsk_graph, input_array, input_iteration_order,
                                      masked)
 
-                all_chunks = tuple(self._node_cache[id(arr)].keys()
+                all_chunks = tuple(self._node_cache[ider(arr)].keys()
                                    for arr in array.sources)
 
                 node = biggus._init.StreamsHandlerNode(array,
                                           array.streams_handler(masked))
-                iteration_order = node.input_iteration_order(
-                    iteration_order)
-                sub_tasks = []
+
+                def produce_chunks(*all_chunks):
+                    process_result = node.process_chunks(*all_chunks)
+                    result = node.finalise()
+                    if result is None:
+                        # Itself returns a chunk.
+                        return process_result
+                    else:
+                        return result
+
                 # Pair up the chunks for each source (TODO: Check that chunks line up...)
                 for chunks in zip(*all_chunks):
-                    def produce_chunks(*all_chunks):
-#                         for chunks in all_chunks:
-#                             assert all(chunk.keys == chunks[0].keys for chunk in chunks)
-                        process_result = node.process_chunks(*all_chunks)
-                        result = node.finalise()
-                        if result is None:
-                            # Itself returns a chunk.
-                            return process_result
-                        else:
-                            return result
+
 
                     produce_chunks.__name__ = handler.__class__.__name__
                     task = tuple([produce_chunks] + [list(chunks)])
-                    sub_tasks.append(ider(task))
-                    dsk_graph[ider(task)] = task
-                    nodes[ider(task)] = task
+#                     print(chunks)
+                    # TODO: Pass a chunk to get a nicer ID.
+                    chunk_id = ider(task)
+                    dsk_graph[chunk_id] = task
+                    nodes[chunk_id] = task
             else:
                 node = biggus._init.ProducerNode(array, iteration_order, masked)
                 chunks = []
-                def lazy_chunks(chunk_key):
-                    subarray = node.array[chunk_key]
+
+                def biggus_chunk(biggus_array, chunk_key, masked):
                     if masked:
-                        fn = subarray.masked_array
+                        array = biggus_array.masked_array()
                     else:
-                        fn = subarray.ndarray
-                    return biggus._init.Chunk(chunk_key, fn())
-                lazy_chunks.__name__ = '{}'.format(array.__class__.__name__)
+                        array = biggus_array.ndarray()
+
+                    return biggus._init.Chunk(chunk_key, array)
+
+                biggus_chunk.__name__ = '{}'.format(array.__class__.__name__)
 
                 for chunk_key in node.chunk_index_gen():
-                    task = (lazy_chunks, chunk_key)
+                    biggus_array = node.array[chunk_key]
+                    chunk_id = ider(biggus_array)
+#                     print(chunk_id, id(node.array[tuple(chunk_key)]))
+#                     print('CHUNKY:', chunk_key)
+                    task = (biggus_chunk, biggus_array, chunk_key, masked)
                     chunks.append(task)
-
-                    dsk_graph[ider(task)] = task
-                    nodes[ider(task)] = task
-
+                    dsk_graph[chunk_id] = task
+                    nodes[chunk_id] = task
+                print('CHUNKS:', chunks)
             self._node_cache[cache_key] = nodes
         return nodes
 
@@ -83,7 +94,7 @@ class DaskGroup(AllThreadedEngine.Group):
         for array in self.arrays:
             self.dask_task(dsk_graph, array, masked=masked, top=True)
             def foo(array):
-                def make_result(all_chunks):
+                def collect_array(all_chunks):
                     result_node = biggus._init.NdarrayNode(array, masked)
                     for chunks in all_chunks:
                         # TODO: Factor it so that this isn't necessary...
@@ -91,9 +102,10 @@ class DaskGroup(AllThreadedEngine.Group):
                             chunks = [chunks]
                         result_node.process_chunks(chunks)
                     return result_node.result
-                return make_result
-            if ider(array) not in dsk_graph:
-                dsk_graph[ider(array)] = (foo(array), list(self._node_cache[id(array)].keys()))
+                return collect_array
+            array_id = ider(array)
+            if array_id not in dsk_graph:
+                dsk_graph[array_id] = (foo(array), list(self._node_cache[ider(array)].keys()))
         return dsk_graph
 
     def dask_task(self, dsk_graph, array, masked=False, top=False):
@@ -109,11 +121,12 @@ class DaskEngine(Engine):
     def __init__(self, dask_getter=None):
         if dask_getter is None:
             import dask.multiprocessing
-            dask_getter = dask.multiprocessing.get
+            import dask.threaded
+            dask_getter = dask.threaded.get
         self.dask_getter = dask_getter
 
     def _daskify(self, arrays, masked=False):
-        return DaskGroup(arrays).dask()
+        return DaskGroup(arrays).dask(masked)
 
     def masked_arrays(self, *arrays):
         ids = [ider(array) for array in arrays]
@@ -137,12 +150,14 @@ if __name__ == '__main__':
 
     e = DaskEngine()
 
-    biggus._init.MAX_CHUNK_SIZE = 2 * 8
+    biggus._init.MAX_CHUNK_SIZE = 2 * 2
     a = biggus.zeros([8, 2, 2])
     add = a + 1
     b = biggus.mean(a - a, axis=0)
     m = biggus.mean(a, axis=0)
+    m1 = biggus.var(add, axis=1)
     s = biggus.std(a, axis=0)
+    delta = add - m
 
 #     print e._daskify(a)
     from pprint import pprint
@@ -153,11 +168,30 @@ if __name__ == '__main__':
 
     import dask.dot
     expr = add
-    graph = e.graph(expr, b, s, s, m)
+    graph = e.graph(expr, b, s, s, m, delta)
     dask.dot.dot_graph(graph)
     pprint(graph)
-    print(ider(expr))
-    print(get(graph, ider(expr)))
-    print(get(graph, ider(s)))
+    print(e.ndarrays(delta)[0].shape)
+    
+    biggus.engine = DaskEngine()
+    import numpy.testing
+    axis = 0
+    data = np.arange(3 * 4, dtype='f4').reshape(3, 4)
+    array = biggus.NumpyArrayAdapter(data)
+    mean = biggus.mean(array, axis=axis)
+    op_result, = biggus.ndarrays([mean])
+    np_result = np.mean(data, axis=axis)
+    print(op_result)
+    print(np_result)
+    graph = e.graph(mean)
+    dask.dot.dot_graph(graph)
+    pprint(graph)
 
-    dask_graph = e.ndarrays(arr)
+
+    import dask.threaded
+    dask_getter = dask.threaded.get
+    targets = sorted(graph.keys())
+    results = dask_getter(graph, targets)
+    pprint(dict(zip(targets, results)))
+
+    np.testing.assert_array_almost_equal(op_result, np_result)
