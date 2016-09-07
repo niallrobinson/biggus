@@ -163,7 +163,6 @@ class ProducerNode(Node):
         # identified the relevant slices.
         all_cuts = _all_slices_inner(self.array.shape,
                                      always_slices=True)
-        print('f:', all_cuts)
         all_cuts = [all_cuts[i] for i in self.iteration_order]
         cut_shape = tuple(len(cuts) for cuts in all_cuts)
         inverse_order = [self.iteration_order.index(i) for

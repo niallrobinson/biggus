@@ -2,6 +2,7 @@ from biggus import *
 from biggus._init import Engine
 import biggus._init
 import numpy as np
+import collections
 
 
 def ider(input):
@@ -13,6 +14,7 @@ def ider(input):
         result = 'id_{}'.format(id(input))
     return result
 
+
 def array_id(array, iteration_order=None, masked=False):
     if iteration_order is None:
         iteration_order = range(array.ndim)
@@ -21,14 +23,19 @@ def array_id(array, iteration_order=None, masked=False):
                                                             id(array))
     return result
 
+
 class DaskGroup(AllThreadedEngine.Group):
     def __init__(self, arrays):
         self.arrays = arrays
         self._node_cache = {}
 
+        #: A place to track node info for naming and debug.
+        self._node_info = {}
+
     def _make_nodes(self, dsk_graph, array, iteration_order, masked, top=False):
         cache_key = array_id(array, iteration_order, masked)
         nodes = self._node_cache.get(cache_key, None)
+
         if nodes is None:
             nodes = {}
             if hasattr(array, 'streams_handler'):
@@ -36,8 +43,7 @@ class DaskGroup(AllThreadedEngine.Group):
                                           array.streams_handler(masked))
                 handler = array.streams_handler(masked)
                 input_iteration_order = handler.input_iteration_order(iteration_order)
-                print('iT order:', iteration_order, input_iteration_order)
-                import collections
+
                 sources_chunks = []
                 for input_array in array.sources:
                     source_chunks_by_key = collections.defaultdict(list)
@@ -48,9 +54,7 @@ class DaskGroup(AllThreadedEngine.Group):
                     self._make_nodes(dsk_graph, input_array, input_iteration_order,
                                      masked)
                     for chunk_id, chunks in self._node_cache[array_id(input_array, input_iteration_order, masked)].items():
-                        print('blah:', chunks)
-                        keys = chunks[2]
-                        print(keys)
+                        keys = chunks[1]
                         transformer = getattr(handler, 'output_keys', lambda keys: keys)
                         source_chunks_by_key[str(transformer(keys))].append([chunk_id, chunks])
                 all_chunks = tuple(self._node_cache[array_id(arr, input_iteration_order, masked)].items()
@@ -59,12 +63,11 @@ class DaskGroup(AllThreadedEngine.Group):
                 [all_keys.extend(chunks_by_key.keys()) for chunks_by_key in sources_chunks]
                 all_keys = set(all_keys)
 
-
-
-                def produce_chunks(*all_chunks):
+                def produce_chunks(produced_keys, *all_chunks):
                     import random
                     import time
-                    
+                    time.sleep(random.randint(0, 1000) / 10000.)
+
                     try:
                         from itertools import izip_longest as zip_longest
                     except ImportError:
@@ -74,14 +77,11 @@ class DaskGroup(AllThreadedEngine.Group):
                         # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx
                         args = [iter(iterable)] * n
                         return zip_longest(fillvalue=fillvalue, *args)
-                    
                     all_chunks = list(grouper(all_chunks, len(array.sources)))
-                    
-                    time.sleep(random.randint(0, 10) / 10.)
-                    print('all_chunks', all_chunks)
+                    print('all:', all_chunks)
+                    process_result = None
                     for chunks in all_chunks:
-                        print('chunks:', chunks)
-                        process_result = node.process_chunks(*[chunks])
+                        process_result = node.process_chunks(chunks)
                     result = node.finalise()
                     if result is None:
                         # Itself returns a chunk.
@@ -90,42 +90,27 @@ class DaskGroup(AllThreadedEngine.Group):
                         return result
 
                 for key in all_keys:
-                    print('key:', key)
                     # For all source, pick out all tasks that match the current key.
                     all_chunks = [[key_id for key_id, chunk in chunks_by_key[key]]
                                   for chunks_by_key in sources_chunks]
-                    print('asdads:', key)
-                    print(all_chunks)
+                    all_chunks_real = [[chunk for key_id, chunk in chunks_by_key[key]]
+                                  for chunks_by_key in sources_chunks]
                     # Pivot the chunks so that they come in groups, one per source.
                     pivoted = zip(*all_chunks)
-
                     produce_chunks.__name__ = handler.__class__.__name__
                     # Flatten out the pivot so that dask de-references the IDs
-                    task = tuple([produce_chunks] + [item for sublist in pivoted for item in sublist])
+                    import random
+                    chunk = [item for sublist in all_chunks_real for item in sublist][0]
+                    keys = chunk[1]
+                    task = tuple([produce_chunks, chunk[1]] + [item for sublist in pivoted for item in sublist])
                     chunk_id = ider(task)
                     dsk_graph[chunk_id] = task
                     nodes[chunk_id] = task
-
-                # Pair up the chunks for each source (TODO: Check that chunks line up...)
-#                 for chunks in zip(*all_chunks):
-#                     print(chunks)
-#                     keys, chunks = zip([zip(*pair) for pair in chunks])
-#                     
-#                     print('keys:', chunks)
-#                     print(keys)
-#                     produce_chunks.__name__ = handler.__class__.__name__
-#                     task = tuple([produce_chunks] + [list(chunks)])
-# #                     print(chunks)
-#                     # TODO: Pass a chunk to get a nicer ID.
-#                     chunk_id = ider(task)
-#                     dsk_graph[chunk_id] = task
-#                     nodes[chunk_id] = task
             else:
-                print('it_order:', iteration_order, iteration_order[::-1])
                 node = biggus._init.ProducerNode(array, iteration_order[::-1], masked)
                 chunks = []
 
-                def biggus_chunk(biggus_array, chunk_key, masked):
+                def biggus_chunk(chunk_key, biggus_array, masked):
                     if masked:
                         array = biggus_array.masked_array()
                     else:
@@ -136,12 +121,9 @@ class DaskGroup(AllThreadedEngine.Group):
                 biggus_chunk.__name__ = '{}'.format(array.__class__.__name__)
 
                 for chunk_key in node.chunk_index_gen():
-                    print('Chunk:', chunk_key)
                     biggus_array = node.array[chunk_key]
                     chunk_id = array_id(biggus_array, iteration_order, masked)
-#                     print(chunk_id, id(node.array[tuple(chunk_key)]))
-#                     print('CHUNKY:', chunk_key)
-                    task = (biggus_chunk, biggus_array, chunk_key, masked)
+                    task = (biggus_chunk, chunk_key, biggus_array, masked)
                     chunks.append(task)
                     dsk_graph[chunk_id] = task
                     nodes[chunk_id] = task
@@ -213,10 +195,10 @@ if __name__ == '__main__':
     from pprint import pprint
 
     e = DaskEngine()
-
-    biggus._init.MAX_CHUNK_SIZE = 2 * 2
+    biggus.engine = e
+#     biggus._init.MAX_CHUNK_SIZE = 2 * 8 * 1024
     
-    if False:
+    if True:
         a = biggus.zeros([8, 2, 2])
         add = a + 1
         b = biggus.mean(a - a, axis=0)
@@ -234,33 +216,135 @@ if __name__ == '__main__':
         
         expr = add
         graph = e.graph(expr, b, s, s, m, delta)
+        graph = e.graph(expr)
+
         dask.dot.dot_graph(graph)
         pprint(graph)
         print(e.ndarrays(delta)[0].shape)
     
     print('-' * 80)
     
-    biggus.engine = DaskEngine()
-    import numpy.testing
-    axis = 0
-    data = np.arange(3 * 4 * 2, dtype='f4').reshape(3, 4, -1)
-    array = biggus.NumpyArrayAdapter(data)
-    mean = biggus.mean(array, axis=axis)
+    if True:
+        shape = (500, 30, 40)
+        size = np.prod(shape)
+        raw_data = np.linspace(0, 1, num=size).reshape(shape)
+        counter = raw_data
+        array = biggus.NumpyArrayAdapter(counter)
+        mean_array = biggus.mean(array, axis=0)
+        std_array = biggus.std(array, axis=0)
+        graph = e.graph(mean_array, std_array)
+        dask.dot.dot_graph(graph)
+    print('-' * 80)
     
-    graph = e.graph(mean)
-    dask.dot.dot_graph(graph)
-    pprint(graph)
+    if False:
+        
+        import numpy.testing
+        axis = 0
+        data = np.arange(3 * 4 * 2, dtype='f4').reshape(3, 4, -1)
+        array = biggus.NumpyArrayAdapter(data)
+        mean = biggus.mean(array, axis=axis)
+        
+        graph = e.graph(mean)
+        dask.dot.dot_graph(graph)
+        pprint(graph)
+    
+        op_result, = biggus.ndarrays([mean])
+        np_result = np.mean(data, axis=axis)
+        print(op_result)
+        print(np_result)
+    
+    
+        import dask.threaded
+        dask_getter = dask.threaded.get
+        targets = sorted(graph.keys())
+        results = dask_getter(graph, targets)
+        pprint(dict(zip(targets, results)))
+    
+        np.testing.assert_array_almost_equal(op_result, np_result)
+        
+        
+    if True:
+        dtype = np.float32
 
-    op_result, = biggus.ndarrays([mean])
-    np_result = np.mean(data, axis=axis)
-    print(op_result)
-    print(np_result)
+        def _biggus_filter(data, weights):
+            # Filter a data array (time, <other dimensions>) using information in
+            # weights dictionary.
+            #
+            # Args:
+            #
+            # * data:
+            #     biggus array of the data to be filtered
+            # * weights:
+            #     dictionary of absolute record offset : weight
+    
+            # Build filter_matrix (time to time' mapping).
+            shape = data.shape
+    
+            # Build filter matrix as a numpy array and then populate.
+            filter_matrix_np = np.zeros((shape[0], shape[0])).astype(dtype)
+    
+            for offset, value in weights.items():
+                filter_matrix_np += np.diag([value] * (shape[0] - offset),
+                                            k=offset)
+                if offset > 0:
+                    filter_matrix_np += np.diag([value] * (shape[0] - offset),
+                                                k=-offset)
+    
+            # Create biggus array for filter matrix, adding in other dimensions.
+            for _ in shape[1:]:
+                filter_matrix_np = filter_matrix_np[..., np.newaxis]
+    
+            filter_matrix_bg_single = biggus.NumpyArrayAdapter(filter_matrix_np)
+    
+            # Broadcast to correct shape (time, time', lat, lon).
+            filter_matrix_bg = biggus.BroadcastArray(
+                filter_matrix_bg_single, {i+2: j for i, j in enumerate(shape[1:])})
+    
+            # Broadcast filter to same shape.
+            biggus_data_for_filter = biggus.BroadcastArray(data[np.newaxis, ...],
+                                                           {0: shape[0]})
+    
+            # Multiply two arrays together and sum over second time dimension.
+            filtered_data = biggus.sum(biggus_data_for_filter * filter_matrix_bg,
+                                       axis=1)
+    
+            # Cut off records at start and end of output array where the filter
+            # cannot be fully applied.
+            filter_halfwidth = len(weights) - 1
+            filtered_data = filtered_data[filter_halfwidth:-filter_halfwidth]
+    
+            return filtered_data
 
+        def test__biggus_filter():
+            shape = (1451, 1, 1)
+    
+            # Generate dummy data as biggus array.
+            numpy_data = np.random.random(shape).astype(dtype)
+            biggus_data = biggus.NumpyArrayAdapter(numpy_data)
+    
+            # Information for filter...
+            # Dictionary of weights: key = offset (absolute value), value = weight
+            weights = {0: 0.4, 1: 0.2, 2: 0.1}
+            # This is equivalent to a weights array of [0.1, 0.2, 0.4, 0.2, 0.1].
+            filter_halfwidth = len(weights) - 1
+    
+            # Filter data
+            filtered_biggus_data = _biggus_filter(biggus_data, weights)
+    
+            # Extract eddy component (original data - filtered data).
+            eddy_biggus_data = (biggus_data[filter_halfwidth:-filter_halfwidth] -
+                                filtered_biggus_data)
+    
+            # Aggregate over time dimension.
+            mean_eddy_biggus_data = biggus.mean(eddy_biggus_data, axis=0)
+    
+            graph = e.graph(mean_eddy_biggus_data)
+            pprint(graph)
+            dask.dot.dot_graph(graph)
+            # Force evaluation.
+            mean_eddy_numpy_data = mean_eddy_biggus_data.ndarray()
+    
+            # Confirm correct shape.
+            np.testing.assert_array_equal(mean_eddy_numpy_data.shape, shape[1:])
 
-    import dask.threaded
-    dask_getter = dask.threaded.get
-    targets = sorted(graph.keys())
-    results = dask_getter(graph, targets)
-    pprint(dict(zip(targets, results)))
-
-    np.testing.assert_array_almost_equal(op_result, np_result)
+        test__biggus_filter()
