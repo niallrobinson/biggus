@@ -163,6 +163,7 @@ class ProducerNode(Node):
         # identified the relevant slices.
         all_cuts = _all_slices_inner(self.array.shape,
                                      always_slices=True)
+        print('f:', all_cuts)
         all_cuts = [all_cuts[i] for i in self.iteration_order]
         cut_shape = tuple(len(cuts) for cuts in all_cuts)
         inverse_order = [self.iteration_order.index(i) for
@@ -2225,10 +2226,24 @@ class _AggregationStreamsHandler(_StreamsHandler):
         order.append(self.axis)
         return order
 
+    def output_keys(self, source_keys):
+        """
+        Given input chunk keys, compute what keys will be needed to put
+        the result into the result array.
+        
+        As an example of where this gets used - when we aggregate on a particular axis,
+        the source keys may be (0:2, None:None), but for an aggregation on axis 0, they would
+        result in target values on dimension 2 only and so be (None: None, )
+        """
+        keys = list(source_keys)
+        # Remove the aggregated axis from the keys.
+        del keys[self.axis]
+        return keys
+
     def process_chunks(self, chunks):
         chunk, = chunks
-        keys = list(chunk.keys)
-        del keys[self.axis]
+        keys = self.output_keys(chunk.keys)
+
         result = None
         # If this chunk is a new source of data, do appropriate finalisation
         # of the previous chunk and initialise this one.
