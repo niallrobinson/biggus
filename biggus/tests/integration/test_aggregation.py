@@ -104,6 +104,11 @@ class Test__slices_with_mathematical_filter(unittest.TestCase):
         return filtered_data
 
     def test__biggus_filter(self):
+        # This is a really convoluted example (pun partially intended) that appears
+        # to be applying a kernel function of weights to some data.
+        # There more efficient ways of doing this, and the explicit broadcasting is altogether
+        # unnecessary, but it serves as a complex task that has been implemented in the wild.
+
         shape = (1451, 1, 1)
 
         # Generate dummy data as biggus array.

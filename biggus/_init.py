@@ -677,7 +677,15 @@ class Array(six.with_metaclass(ABCMeta, object)):
 
 @export
 class ArrayContainer(Array):
-    "A biggus.Array which passes calls through to the contained array."
+    """
+    A biggus.Array which passes calls through to the contained array.
+
+    Note: This array type should be used sparingly - because it contains an array,
+    any subsequent processing has to happen on the entirety of the contained array.
+    There is already provision for alternative "stream" based approaches (e.g. mean)
+    that avoid this limitation.
+
+    """
     def __init__(self, contained_array):
         self.array = contained_array
 
@@ -2237,7 +2245,7 @@ class _AggregationStreamsHandler(_StreamsHandler):
         keys = list(source_keys)
         # Remove the aggregated axis from the keys.
         del keys[self.axis]
-        return keys
+        return tuple(keys)
 
     def process_chunks(self, chunks):
         chunk, = chunks
@@ -2394,6 +2402,7 @@ class _SumMaskedStreamsHandler(_AggregationStreamsHandler):
 
 
 class _MeanStreamsHandler(_AggregationStreamsHandler):
+    nice_name = 'mean'
     def __init__(self, array, axis, mdtol):
         # The mdtol argument is not applicable to non-masked arrays
         # so it is ignored.

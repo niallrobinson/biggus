@@ -3,126 +3,213 @@ from biggus._init import Engine
 import biggus._init
 import numpy as np
 import collections
-
-
-def ider(input):
-    if isinstance(input, biggus._init.Chunk):
-        result = 'chunk {} <{}>'.format(input.shape, id(input))
-    elif isinstance(input, biggus._init.Array):
-        result = 'array {} <{}>'.format(input.shape, id(input))
-    else:
-        result = 'id_{}'.format(id(input))
-    return result
+import copy
 
 
 def array_id(array, iteration_order=None, masked=False):
     if iteration_order is None:
         iteration_order = range(array.ndim)
-    result = '{}array {}; chunk-order: {}; id <{}>;'.format('[masked]' if masked else '',
-                                                            array.shape, ','.join(map(str, iteration_order)),
-                                                            id(array))
+    result = '{}array {}\n\n(id: {})'.format('[masked]' if masked else '',
+                                                            array.shape, id(array))
     return result
 
+
+def slice_repr(slice_instance):
+    """
+    Turn things like `slice(None, 2, -1)` into `[:2:-1]`.
+
+    """
+    if not isinstance(slice_instance, slice):
+        raise TypeError('Unhandled type {}'.format(type(slice_instance)))
+    start = slice_instance.start or ''
+    stop = slice_instance.stop or ''
+    step = slice_instance.step or ''
+
+    repr = '{}:'.format(start)
+    if stop:
+        repr += '{}'.format(stop)
+        if step:
+            repr += ':'
+    if step:
+        repr += '{}'.format(step)
+    return repr
+
+from uuid import uuid4
 
 class DaskGroup(AllThreadedEngine.Group):
     def __init__(self, arrays):
         self.arrays = arrays
         self._node_cache = {}
 
-        #: A place to track node info for naming and debug.
-        self._node_info = {}
+    @staticmethod
+    def biggus_chunk(chunk_key, biggus_array, masked):
+        """
+        A function that lazily evaluates a biggus.Chunk. This is useful for passing through
+        as a dask task so that we don't have to compute the chunk in order to compute the graph.
+
+        """
+        if masked:
+            array = biggus_array.masked_array()
+        else:
+            array = biggus_array.ndarray()
+
+        return biggus._init.Chunk(chunk_key, array)
+
+    @staticmethod
+    def wibble(nicename):
+        def produce_chunks(produced_keys, handler, n_sources, *all_chunks):
+            import random
+            import time
+            time.sleep(random.randint(0, 1000) / 10000.)
+    
+            try:
+                from itertools import izip_longest as zip_longest
+            except ImportError:
+                from itertools import zip_longest
+            def grouper(iterable, n, fillvalue=None):
+                "Collect data into fixed-length chunks or blocks"
+                # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx
+                args = [iter(iterable)] * n
+                return zip_longest(fillvalue=fillvalue, *args)
+            all_chunks = list(grouper(all_chunks, n_sources))
+            process_result = None
+            for chunks in all_chunks:
+                process_result = handler.process_chunks(chunks)
+            result = handler.finalise()
+            if result is None:
+                if process_result is None:
+                    raise RuntimeError('No result to process. Please raise an issue on the biggus '
+                                       'issue tracker with the calculation that was performed.')
+                # Itself returns a chunk.
+                return process_result
+            else:
+                return result
+        produce_chunks.__name__ = nicename
+        return produce_chunks
+
+    def _make_stream_handler_nodes(self, dsk_graph, array, iteration_order, masked):
+        """
+        Produce task graph entries for an array that comes from a biggus StreamsHandler.
+        This is essentially every type of array that isn't already a thing on
+        disk/in-memory. StreamsHandler arrays include all aggregations and
+        elementwise operations.
+
+        """
+        nodes = {}
+        handler = array.streams_handler(masked)
+        input_iteration_order = handler.input_iteration_order(iteration_order)
+
+        sources_chunks = []
+        for input_array in array.sources:
+            source_chunks_by_key = collections.defaultdict(list)
+            sources_chunks.append(source_chunks_by_key)
+
+            # Make nodes for the source arrays (if they don't already exist) before
+            # we do anything else.
+            self._make_nodes(dsk_graph, input_array, input_iteration_order,
+                             masked)
+
+            for chunk_id, chunks in self._node_cache[array_id(input_array, input_iteration_order, masked)].items():
+                keys = chunks[1]
+                transformer = getattr(handler, 'output_keys', lambda keys: keys)
+                if hasattr(input_array, 'streams_handler'):
+                    # Get the transformer of the input array, and apply it to the keys.
+                    transformer = getattr(input_array.streams_handler(masked),
+                                          'output_keys', transformer)
+
+                source_chunks_by_key[str(transformer(keys))].append([chunk_id, chunks])
+        all_chunks = tuple(self._node_cache[array_id(arr, input_iteration_order, masked)].items()
+                           for arr in array.sources)
+        all_keys = []
+        [all_keys.extend(chunks_by_key.keys()) for chunks_by_key in sources_chunks]
+        all_keys = set(all_keys)
+
+        for key in all_keys:
+            # For all source, pick out all tasks that match the current key.
+            all_chunks = [[key_id for key_id, chunk in chunks_by_key[key]]
+                          for chunks_by_key in sources_chunks]
+            all_chunks_real = [[chunk for key_id, chunk in chunks_by_key[key]]
+                          for chunks_by_key in sources_chunks]
+
+            # TODO: Assert all chunks same length?
+
+            # Pivot the chunks so that they come in groups, one per source.
+            pivoted = zip(*all_chunks)
+
+            name = getattr(handler, 'nice_name', handler.__class__.__name__)
+            if hasattr(handler, 'axis'):
+                name += '\n(axis={})'.format(handler.axis)
+            # For ElementwiseStreams handlers, use the function that they wrap (e.g "add")
+            if hasattr(handler, 'operator'):
+                name = handler.operator.__name__
+            produce_chunks = self.wibble(name)
+            # Flatten out the pivot so that dask de-references the IDs
+            chunk = [item for sublist in all_chunks_real for item in sublist][0]
+            keys = chunk[1]
+
+            transformer = lambda keys: keys
+            if hasattr(array.sources[0], 'streams_handler'):
+                # Get the transformer of the input array, and apply it to the keys.
+                transformer = getattr(array.sources[0].streams_handler(masked),
+                                      'output_keys', transformer)
+
+            shape = array.sources[0][transformer(keys)].shape
+            pretty_index = ', '.join(map(slice_repr, transformer(keys)))
+            if all(key == slice(None) for key in keys):
+                pretty_index = 'NOTHING!'
+                subset = ''
+            else:
+                subset = 'subset from [{}]\n'.format(pretty_index)
+
+            source_chunks = [item for sublist in pivoted for item in sublist]
+
+            task = tuple([produce_chunks, chunk[1], handler, len(array.sources)] + source_chunks)
+            chunk_id = 'array ({})\n\n{}(id: {})'.format(', '.join(map(str, shape)),
+                                                                  subset,
+                                                                  uuid4())
+            dsk_graph[chunk_id] = task
+            nodes[chunk_id] = task
+        return nodes
 
     def _make_nodes(self, dsk_graph, array, iteration_order, masked, top=False):
         cache_key = array_id(array, iteration_order, masked)
+        # By the end of this function Nodes will be a dictionary with one item
+        # per chunk to be processed for this array (uuid: the-dask-computation).
         nodes = self._node_cache.get(cache_key, None)
 
         if nodes is None:
-            nodes = {}
             if hasattr(array, 'streams_handler'):
-                node = biggus._init.StreamsHandlerNode(array,
-                                          array.streams_handler(masked))
-                handler = array.streams_handler(masked)
-                input_iteration_order = handler.input_iteration_order(iteration_order)
-
-                sources_chunks = []
-                for input_array in array.sources:
-                    source_chunks_by_key = collections.defaultdict(list)
-                    sources_chunks.append(source_chunks_by_key)
-
-                    # Make nodes for the source arrays (if they don't already exist) before
-                    # we do anything else.
-                    self._make_nodes(dsk_graph, input_array, input_iteration_order,
-                                     masked)
-                    for chunk_id, chunks in self._node_cache[array_id(input_array, input_iteration_order, masked)].items():
-                        keys = chunks[1]
-                        transformer = getattr(handler, 'output_keys', lambda keys: keys)
-                        source_chunks_by_key[str(transformer(keys))].append([chunk_id, chunks])
-                all_chunks = tuple(self._node_cache[array_id(arr, input_iteration_order, masked)].items()
-                                   for arr in array.sources)
-                all_keys = []
-                [all_keys.extend(chunks_by_key.keys()) for chunks_by_key in sources_chunks]
-                all_keys = set(all_keys)
-
-                def produce_chunks(produced_keys, *all_chunks):
-                    import random
-                    import time
-                    time.sleep(random.randint(0, 1000) / 10000.)
-
-                    try:
-                        from itertools import izip_longest as zip_longest
-                    except ImportError:
-                        from itertools import zip_longest
-                    def grouper(iterable, n, fillvalue=None):
-                        "Collect data into fixed-length chunks or blocks"
-                        # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx
-                        args = [iter(iterable)] * n
-                        return zip_longest(fillvalue=fillvalue, *args)
-                    all_chunks = list(grouper(all_chunks, len(array.sources)))
-                    print('all:', all_chunks)
-                    process_result = None
-                    for chunks in all_chunks:
-                        process_result = node.process_chunks(chunks)
-                    result = node.finalise()
-                    if result is None:
-                        # Itself returns a chunk.
-                        return process_result
-                    else:
-                        return result
-
-                for key in all_keys:
-                    # For all source, pick out all tasks that match the current key.
-                    all_chunks = [[key_id for key_id, chunk in chunks_by_key[key]]
-                                  for chunks_by_key in sources_chunks]
-                    all_chunks_real = [[chunk for key_id, chunk in chunks_by_key[key]]
-                                  for chunks_by_key in sources_chunks]
-                    # Pivot the chunks so that they come in groups, one per source.
-                    pivoted = zip(*all_chunks)
-                    produce_chunks.__name__ = handler.__class__.__name__
-                    # Flatten out the pivot so that dask de-references the IDs
-                    import random
-                    chunk = [item for sublist in all_chunks_real for item in sublist][0]
-                    keys = chunk[1]
-                    task = tuple([produce_chunks, chunk[1]] + [item for sublist in pivoted for item in sublist])
-                    chunk_id = ider(task)
-                    dsk_graph[chunk_id] = task
-                    nodes[chunk_id] = task
+                nodes = self._make_stream_handler_nodes(dsk_graph, array, iteration_order, masked)
             else:
+                nodes = {}
                 node = biggus._init.ProducerNode(array, iteration_order[::-1], masked)
                 chunks = []
+                def foo(name):
+                    def biggus_chunk(chunk_key, biggus_array, masked):
+                        """
+                        A function that lazily evaluates a biggus.Chunk. This is useful for passing through
+                        as a dask task so that we don't have to compute the chunk in order to compute the graph.
+                
+                        """
+                        if masked:
+                            array = biggus_array.masked_array()
+                        else:
+                            array = biggus_array.ndarray()
 
-                def biggus_chunk(chunk_key, biggus_array, masked):
-                    if masked:
-                        array = biggus_array.masked_array()
-                    else:
-                        array = biggus_array.ndarray()
+                        return biggus._init.Chunk(chunk_key, array)
+                    biggus_chunk.__name__ = name
+                    return biggus_chunk
 
-                    return biggus._init.Chunk(chunk_key, array)
+                biggus_chunk = copy.deepcopy(self.biggus_chunk)
+                # TODO: Don't this this naming is working - it is the same for all producer nodes.
+                biggus_chunk.__name__ = '{}\n{}'.format(array.__class__.__name__, array.shape)
 
-                biggus_chunk.__name__ = '{}'.format(array.__class__.__name__)
+                biggus_chunk = foo(biggus_chunk.__name__)
 
                 for chunk_key in node.chunk_index_gen():
                     biggus_array = node.array[chunk_key]
-                    chunk_id = array_id(biggus_array, iteration_order, masked)
+#                     chunk_id = array_id(biggus_array, iteration_order, masked)
+                    chunk_id = uuid4()
                     task = (biggus_chunk, chunk_key, biggus_array, masked)
                     chunks.append(task)
                     dsk_graph[chunk_id] = task
@@ -137,8 +224,12 @@ class DaskGroup(AllThreadedEngine.Group):
 #         result_threads = []
         for array in self.arrays:
             self.dask_task(dsk_graph, array, masked=masked, top=True)
+            array_id_val = array_id(array, masked=masked)
+            dependencies = list(self._node_cache[array_id_val].keys())
             def foo(array):
                 def collect_array(all_chunks):
+                    # We make the NdarrayNode inside the calling function as it is this that
+                    # ultimately
                     result_node = biggus._init.NdarrayNode(array, masked)
                     for chunks in all_chunks:
                         # TODO: Factor it so that this isn't necessary...
@@ -147,9 +238,10 @@ class DaskGroup(AllThreadedEngine.Group):
                         result_node.process_chunks(chunks)
                     return result_node.result
                 return collect_array
-            array_id_val = array_id(array, masked=masked)
+
             if array_id_val not in dsk_graph:
-                dsk_graph[array_id_val] = (foo(array), list(self._node_cache[array_id_val].keys()))
+                dsk_graph[array_id_val] = (foo(array), dependencies)
+
         return dsk_graph
 
     def dask_task(self, dsk_graph, array, masked=False, top=False):
@@ -196,7 +288,21 @@ if __name__ == '__main__':
 
     e = DaskEngine()
     biggus.engine = e
-#     biggus._init.MAX_CHUNK_SIZE = 2 * 8 * 1024
+    biggus._init.MAX_CHUNK_SIZE = 2 * 8 * 1024 * 1024
+    
+    if True:
+        shape = (3,)
+        a = biggus.NumpyArrayAdapter(np.random.random(shape))
+        b = biggus.NumpyArrayAdapter(np.zeros((shape[0], shape[0])))
+
+        c = biggus.mean(b, axis=1)
+        d = a - c
+
+        graph = e.graph(d)
+        pprint(graph)
+        dask.dot.dot_graph(graph)
+
+    print('-' * 80)
     
     if True:
         a = biggus.zeros([8, 2, 2])
@@ -225,6 +331,16 @@ if __name__ == '__main__':
     print('-' * 80)
     
     if True:
+        a = biggus.ConstantArray((2, 5))
+        expr = (a/3.) + a - (a * 2)
+        
+        graph = e.graph(expr)
+
+        dask.dot.dot_graph(graph)
+        pprint(graph)
+        print(e.ndarrays(add)[0].shape)
+    
+    if True:
         shape = (500, 30, 40)
         size = np.prod(shape)
         raw_data = np.linspace(0, 1, num=size).reshape(shape)
@@ -236,7 +352,7 @@ if __name__ == '__main__':
         dask.dot.dot_graph(graph)
     print('-' * 80)
     
-    if False:
+    if True:
         
         import numpy.testing
         axis = 0
@@ -261,8 +377,8 @@ if __name__ == '__main__':
         pprint(dict(zip(targets, results)))
     
         np.testing.assert_array_almost_equal(op_result, np_result)
-        
-        
+
+
     if True:
         dtype = np.float32
 
@@ -348,3 +464,5 @@ if __name__ == '__main__':
             np.testing.assert_array_equal(mean_eddy_numpy_data.shape, shape[1:])
 
         test__biggus_filter()
+
+
