@@ -2247,6 +2247,8 @@ class _AggregationStreamsHandler(_StreamsHandler):
         del keys[self.axis]
         return tuple(keys)
 
+    # TODO: Implement a shape processor too.
+
     def process_chunks(self, chunks):
         chunk, = chunks
         keys = self.output_keys(chunk.keys)
@@ -2270,6 +2272,10 @@ class _AggregationStreamsHandler(_StreamsHandler):
 
     @abstractmethod
     def process_data(self, data):
+        pass
+
+    @abstractmethod
+    def finalise(self, data):
         pass
 
 
