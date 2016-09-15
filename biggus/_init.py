@@ -2256,6 +2256,7 @@ class _AggregationStreamsHandler(_StreamsHandler):
         result = None
         # If this chunk is a new source of data, do appropriate finalisation
         # of the previous chunk and initialise this one.
+        print('Agg elem: c:', keys)
         if keys != self.current_keys:
             # If this isn't the first time this method has been called,
             # finalise any data which is waiting to be dealt with.
@@ -2905,6 +2906,7 @@ class _ElementwiseStreamsHandler(_StreamsHandler):
         return iteration_order
 
     def process_chunks(self, chunks):
+        print('Elementwise:', [chunk.keys for chunk in chunks])
         array = self.operator(*[chunk.data for chunk in chunks])
         chunk = Chunk(chunks[0].keys, array)
         return chunk

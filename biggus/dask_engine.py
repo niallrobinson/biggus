@@ -138,7 +138,10 @@ class DaskGroup(AllThreadedEngine.Group):
 
             for chunk_id, task in input_nodes.items():
                 chunk_keys = task[1]
-                source_keys.append(chunk_keys)
+                t_keys = input_keys_transform(input_array, chunk_keys)
+                t_keys = input_keys_transform(array, t_keys)
+                print('n keys', len(t_keys), t_keys)
+                source_keys.append(t_keys)
                 # Define a function that can take a keys specification and turn it into
                 # the keys that the resultant array would write into.
 #                 target_key_transformer = getattr(handler, 'output_keys', lambda key: key)
@@ -147,12 +150,25 @@ class DaskGroup(AllThreadedEngine.Group):
                 all_keys.add(this_key)
                 source_chunks_by_key.setdefault(this_key, []).append([chunk_id, task])
 
-#         import key_grouper
-#         sources_keys_grouped = key_grouper.group_keys(array.shape, source_keys)
-
-
-
-
+        import key_grouper
+        from pprint import pprint
+        print('WHAT!', array.shape)
+        pprint(all_keys)
+        pprint(sources_keys)
+        sources_keys_grouped = key_grouper.group_keys(array.shape, *sources_keys)
+        pprint(sources_keys_grouped)
+        for slice_group, sources_keys_group in sources_keys_grouped.items():
+            # Each group is entirely independent and can have its own task without knowledge
+            # of results from items in other groups.
+            combined = []
+            for source_keys in sources_keys_group:
+                if len(source_keys) == 1:
+                    combined.append(source_keys[0])
+                else:
+#                     t = 'group_me'
+#                     print(source_keys)
+                    combined.append(source_keys)
+            print('combined', combined)
 
         for key in all_keys:
             # For all source, pick out all tasks that match the current key.
@@ -334,6 +350,7 @@ class DaskEngine(Engine):
         return self.dask_getter(self._daskify(arrays, masked=False), ids)
 
     def graph(self, *arrays):
+        # TODO: Return a dask.base.Base instance (of this dict). We then get nice methods...
         return self._daskify(arrays)
 
 
@@ -348,7 +365,7 @@ if __name__ == '__main__':
     from pprint import pprint
 
     e = DaskEngine()
-#     biggus._init.engine = e
+    biggus.engine = e
     # TODO: Make this smaller and have the tests pass!
     biggus._init.MAX_CHUNK_SIZE = 4 * 8# * 1024 * 1000
     
@@ -366,9 +383,9 @@ if __name__ == '__main__':
         expected = (a_n - b_n.mean(axis=1))
 #         np.testing.assert_array_equal(r, expected)
 
-        graph = e.graph(d)
-        print(d.ndarray())
-        print(biggus._init.ndarrays(d))
+#         graph = e.graph(d)
+        print((d + 1).ndarray())
+
         exit(0)
         pprint(graph)
         dask.dot.dot_graph(graph)
