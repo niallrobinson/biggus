@@ -4,7 +4,7 @@ import biggus._init
 import numpy as np
 import collections
 import copy
-from uuid import uuid4
+import uuid
 
 
 def array_id(array, iteration_order=None, masked=False):
@@ -74,12 +74,12 @@ class DaskGroup(AllThreadedEngine.Group):
             all_chunks = list(grouper(all_chunks, n_sources))
             process_result = None
             for chunks in all_chunks:
+                print('rar:', chunks)
                 process_result = handler.process_chunks(chunks)
             result = handler.finalise()
             if result is None:
                 if process_result is None:
-                    raise RuntimeError('No result to process. Please raise an issue on the biggus '
-                                       'issue tracker with the calculation that was performed.')
+                    raise RuntimeError('No result to process.')
                 # Itself returns a chunk.
                 return process_result
             else:
@@ -138,14 +138,17 @@ class DaskGroup(AllThreadedEngine.Group):
 
             for chunk_id, task in input_nodes.items():
                 chunk_keys = task[1]
-                t_keys = input_keys_transform(input_array, chunk_keys)
+                t_keys = chunk_keys
+                print('f:', chunk_keys)
+#                 t_keys = input_keys_transform(input_array, chunk_keys)
+                print('f:', t_keys)
                 t_keys = input_keys_transform(array, t_keys)
                 print('n keys', len(t_keys), t_keys)
                 source_keys.append(t_keys)
                 # Define a function that can take a keys specification and turn it into
                 # the keys that the resultant array would write into.
 #                 target_key_transformer = getattr(handler, 'output_keys', lambda key: key)
-                this_key = str(input_keys_transform(input_array, chunk_keys))
+                this_key = str(t_keys)
 #                 this_key = str(chunk_keys)
                 all_keys.add(this_key)
                 source_chunks_by_key.setdefault(this_key, []).append([chunk_id, task])
@@ -160,38 +163,51 @@ class DaskGroup(AllThreadedEngine.Group):
         for slice_group, sources_keys_group in sources_keys_grouped.items():
             # Each group is entirely independent and can have its own task without knowledge
             # of results from items in other groups.
-            combined = []
-            for source_keys in sources_keys_group:
-                if len(source_keys) == 1:
-                    combined.append(source_keys[0])
-                else:
-#                     t = 'group_me'
-#                     print(source_keys)
-                    combined.append(source_keys)
-            print('combined', combined)
+#             combined = []
+#             for source_keys in sources_keys_group:
+#                 if len(source_keys) == 1:
+#                     combined.append(source_keys[0])
+#                 else:
+#                     combined.append(source_keys)
+#             print('combined', combined)
+            # If we don't have the same chunks for all inputs then we should combine them before passing
+            # them on to the handler.
+            if not all(sources_keys_group[0] == sources for sources in sources_keys_group):
+                print('Combined different!')
+                print('combined', sources_keys_group)
 
-        for key in all_keys:
+            print('SKG:', )
+            pprint(sources_chunks)
+            pprint(sources_keys_group)
+
+            all_chunks = [[the_id for the_id, task in source_chunks_by_key[str(source_key)]]
+                          for source_key in source_keys
+                          for source_keys, source_chunks_by_key in zip(sources_keys_group, sources_chunks)]
+
+            print('allChunks:', all_chunks)
+            pivoted = all_chunks
+#         for key in all_keys:
             # For all source, pick out all tasks that match the current key.
-            all_chunks = [[key_id for key_id, chunk in chunks_by_key.get(key, [])]
-                          for chunks_by_key in sources_chunks]
-            all_chunks_real = [[chunk for key_id, chunk in chunks_by_key.get(key, [])]
-                          for chunks_by_key in sources_chunks]
+#             all_chunks = [[key_id for key_id, chunk in chunks_by_key.get(key, [])]
+#                           for chunks_by_key in sources_chunks]
+#             all_chunks_real = [[chunk for key_id, chunk in chunks_by_key.get(key, [])]
+#                           for chunks_by_key in sources_chunks]
 
-            # TODO: Assert all chunks same length?
-            nchunks = [len(chunks) for chunks in all_chunks]
-            if not all([chunks == nchunks[0] for chunks in nchunks]):
-                print(array.sources)
-                print(array)
-                print(all_chunks)
-                from pprint import pprint
-                for source in sources_chunks:
-                    pprint(source)
-                print(handler)
-                raise ValueError('Not all sources have the same number of chunks...')
+#             # TODO: Assert all chunks same length?
+#             nchunks = [len(chunks) for chunks in all_chunks]
+#             if not all([chunks == nchunks[0] for chunks in nchunks]):
+#                 print(array.sources)
+#                 print(array)
+#                 print(all_chunks)
+#                 from pprint import pprint
+#                 for source in sources_chunks:
+#                     pprint(source)
+#                 print(handler)
+#                 raise ValueError('Not all sources have the same number of chunks...')
 
             # Pivot the chunks so that they come in groups, one per source.
-            pivoted = zip(*all_chunks)
-            print(all_chunks)
+#             pivoted = zip(*all_chunks)
+#             print(all_chunks)
             handler = array.streams_handler(masked)
             name = getattr(handler, 'nice_name', handler.__class__.__name__)
 
@@ -204,34 +220,35 @@ class DaskGroup(AllThreadedEngine.Group):
             produce_chunks = self.wibble(name)
 
             # Flatten out the pivot so that dask can dereferences the IDs
-            task0 = [item for sublist in all_chunks_real for item in sublist][0]
-            keys = task0[1]
+#             task0 = [item for sublist in all_chunks_real for item in sublist][0]
+#             keys = task0[1]
 
 #             from pprint import pprint
 #             pprint(dsk_graph)
 #             dask.dot.dot_graph(dsk_graph)
 
-            if False:
+            if True:
                 shape = []
                 subset = ''
-            else:
-                t_keys = keys
-                print(', '.join(map(slice_repr, keys)), 
-                      ', '.join(map(slice_repr, t_keys)),
-                      array.sources[0].shape, array.shape)
-
-                shape = array.sources[0][keys].shape
-                if all(key == slice(None) for key in t_keys):
-                    subset = ''
-                else:
-                    pretty_index = ', '.join(map(slice_repr, t_keys))
-                    subset = 'subset from [{}]\n'.format(pretty_index)
+#             else:
+#                 t_keys = keys
+#                 print(', '.join(map(slice_repr, keys)), 
+#                       ', '.join(map(slice_repr, t_keys)),
+#                       array.sources[0].shape, array.shape)
+# 
+#                 shape = array.sources[0][keys].shape
+#                 if all(key == slice(None) for key in t_keys):
+#                     subset = ''
+#                 else:
+#                     pretty_index = ', '.join(map(slice_repr, t_keys))
+#                     subset = 'subset from [{}]\n'.format(pretty_index)
 
             source_chunks = [item for sublist in pivoted for item in sublist]
 
+            t_keys = tuple(slice(*slice_tuple) for slice_tuple in slice_group)
             task = tuple([produce_chunks, t_keys, handler, len(array.sources)] + source_chunks)
             chunk_id = 'array ({})\n\n{}(id: {})'.format(', '.join(map(str, shape)),
-                                                         subset, uuid4())
+                                                         subset, uuid.uuid4())
 
             if chunk_id in dsk_graph:
                 raise ValueError('what?')
@@ -284,7 +301,8 @@ class DaskGroup(AllThreadedEngine.Group):
                 for chunk_key in node.chunk_index_gen():
                     biggus_array = node.array[chunk_key]
 #                     chunk_id = array_id(biggus_array, iteration_order, masked)
-                    chunk_id = uuid4()
+                    chunk_id = uuid.uuid4()
+                    print('Ty:', type(array))
                     task = (biggus_chunk, chunk_key, biggus_array, masked)
                     chunks.append(task)
                     if chunk_id in dsk_graph:
@@ -383,13 +401,14 @@ if __name__ == '__main__':
         expected = (a_n - b_n.mean(axis=1))
 #         np.testing.assert_array_equal(r, expected)
 
-#         graph = e.graph(d)
-        print((d + 1).ndarray())
+        graph = e.graph(d + 1)
+        r = e.ndarrays(d + 1.5)
 
-        exit(0)
         pprint(graph)
         dask.dot.dot_graph(graph)
-    exit(0)
+        
+        print(r)
+        exit(0)
     print('-' * 80)
     
     if True:
@@ -416,6 +435,7 @@ if __name__ == '__main__':
         pprint(graph)
         print(e.ndarrays(delta)[0].shape)
     
+#     exit(0)
     print('-' * 80)
     
     if True:
@@ -552,5 +572,4 @@ if __name__ == '__main__':
             np.testing.assert_array_equal(mean_eddy_numpy_data.shape, shape[1:])
 
         test__biggus_filter()
-
 

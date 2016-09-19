@@ -2906,6 +2906,7 @@ class _ElementwiseStreamsHandler(_StreamsHandler):
         return iteration_order
 
     def process_chunks(self, chunks):
+        print("wawar:", chunks)
         print('Elementwise:', [chunk.keys for chunk in chunks])
         array = self.operator(*[chunk.data for chunk in chunks])
         chunk = Chunk(chunks[0].keys, array)
