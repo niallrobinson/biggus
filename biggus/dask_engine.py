@@ -170,44 +170,29 @@ class DaskGroup(AllThreadedEngine.Group):
 #                 else:
 #                     combined.append(source_keys)
 #             print('combined', combined)
+
+            t_keys = tuple(slice(*slice_tuple) for slice_tuple in slice_group)
+
+            sources_chunks_foobar = sources_chunks
+
             # If we don't have the same chunks for all inputs then we should combine them before passing
             # them on to the handler.
             if not all(sources_keys_group[0] == sources for sources in sources_keys_group):
                 print('Combined different!')
                 print('combined', sources_keys_group)
+                new_sources_keys_group = t_keys
 
             print('SKG:', )
-            pprint(sources_chunks)
+            pprint(sources_chunks_foobar)
             pprint(sources_keys_group)
 
             all_chunks = [[the_id for the_id, task in source_chunks_by_key[str(source_key)]]
                           for source_key in source_keys
-                          for source_keys, source_chunks_by_key in zip(sources_keys_group, sources_chunks)]
+                          for source_keys, source_chunks_by_key in zip(sources_keys_group, sources_chunks_foobar)]
 
             print('allChunks:', all_chunks)
             pivoted = all_chunks
-#         for key in all_keys:
-            # For all source, pick out all tasks that match the current key.
-#             all_chunks = [[key_id for key_id, chunk in chunks_by_key.get(key, [])]
-#                           for chunks_by_key in sources_chunks]
-#             all_chunks_real = [[chunk for key_id, chunk in chunks_by_key.get(key, [])]
-#                           for chunks_by_key in sources_chunks]
 
-#             # TODO: Assert all chunks same length?
-#             nchunks = [len(chunks) for chunks in all_chunks]
-#             if not all([chunks == nchunks[0] for chunks in nchunks]):
-#                 print(array.sources)
-#                 print(array)
-#                 print(all_chunks)
-#                 from pprint import pprint
-#                 for source in sources_chunks:
-#                     pprint(source)
-#                 print(handler)
-#                 raise ValueError('Not all sources have the same number of chunks...')
-
-            # Pivot the chunks so that they come in groups, one per source.
-#             pivoted = zip(*all_chunks)
-#             print(all_chunks)
             handler = array.streams_handler(masked)
             name = getattr(handler, 'nice_name', handler.__class__.__name__)
 
@@ -245,7 +230,7 @@ class DaskGroup(AllThreadedEngine.Group):
 
             source_chunks = [item for sublist in pivoted for item in sublist]
 
-            t_keys = tuple(slice(*slice_tuple) for slice_tuple in slice_group)
+            
             task = tuple([produce_chunks, t_keys, handler, len(array.sources)] + source_chunks)
             chunk_id = 'array ({})\n\n{}(id: {})'.format(', '.join(map(str, shape)),
                                                          subset, uuid.uuid4())
@@ -312,6 +297,20 @@ class DaskGroup(AllThreadedEngine.Group):
             self._node_cache[cache_key] = nodes
         return nodes
 
+    @staticmethod
+    def collect(array, masked):
+        def collect_array(all_chunks):
+            # We make the NdarrayNode inside the calling function as it is this that
+            # ultimately
+            result_node = biggus._init.NdarrayNode(array, masked)
+            for chunks in all_chunks:
+                # TODO: Factor it so that this isn't necessary...
+                if isinstance(chunks, biggus._init.Chunk):
+                    chunks = [chunks]
+                result_node.process_chunks(chunks)
+            return result_node.result
+        return collect_array
+
     def dask(self, masked=False):
         # Construct nodes starting from the producers.
         dsk_graph = {}
@@ -321,21 +320,9 @@ class DaskGroup(AllThreadedEngine.Group):
             self.dask_task(dsk_graph, array, masked=masked, top=True)
             array_id_val = array_id(array, masked=masked)
             dependencies = list(self._node_cache[array_id_val].keys())
-            def foo(array):
-                def collect_array(all_chunks):
-                    # We make the NdarrayNode inside the calling function as it is this that
-                    # ultimately
-                    result_node = biggus._init.NdarrayNode(array, masked)
-                    for chunks in all_chunks:
-                        # TODO: Factor it so that this isn't necessary...
-                        if isinstance(chunks, biggus._init.Chunk):
-                            chunks = [chunks]
-                        result_node.process_chunks(chunks)
-                    return result_node.result
-                return collect_array
 
             if array_id_val not in dsk_graph:
-                dsk_graph[array_id_val] = (foo(array), dependencies)
+                dsk_graph[array_id_val] = (self.collect(array, masked), dependencies)
 
         return dsk_graph
 
