@@ -152,7 +152,8 @@ class ProducerNode(Node):
         self.masked = masked
         super(ProducerNode, self).__init__()
 
-    def chunk_index_gen(self):
+    @staticmethod
+    def chunk_index_gen(shape, iteration_order):
         # We always slice up the Array into the same chunks, but
         # the order that we traverse those chunks depends on
         # `self.iteration_order`.
@@ -161,12 +162,12 @@ class ProducerNode(Node):
         # we have to transpose `all_cuts` and `cut_shape` ourselves.
         # Then we have to invert the transposition once we have
         # identified the relevant slices.
-        all_cuts = _all_slices_inner(self.array.shape,
+        all_cuts = _all_slices_inner(shape,
                                      always_slices=True)
-        all_cuts = [all_cuts[i] for i in self.iteration_order]
+        all_cuts = [all_cuts[i] for i in iteration_order]
         cut_shape = tuple(len(cuts) for cuts in all_cuts)
-        inverse_order = [self.iteration_order.index(i) for
-                         i in range(len(self.iteration_order))]
+        inverse_order = [iteration_order.index(i) for
+                         i in range(len(iteration_order))]
         for cut_indices in np.ndindex(*cut_shape):
             key = tuple(cuts[i] for cuts, i in zip(all_cuts, cut_indices))
             key = tuple(key[i] for i in inverse_order)
@@ -182,7 +183,7 @@ class ProducerNode(Node):
 
         """
         try:
-            for key in self.chunk_index_gen():
+            for key in self.chunk_index_gen(self.array.shape, self.iteration_order):
                 # Now we have the slices that describe the next chunk.
                 # For example, key might be equivalent to
                 # `[11:12, 0:3, :, :]`.
@@ -2256,7 +2257,6 @@ class _AggregationStreamsHandler(_StreamsHandler):
         result = None
         # If this chunk is a new source of data, do appropriate finalisation
         # of the previous chunk and initialise this one.
-        print('Agg elem: c:', keys)
         if keys != self.current_keys:
             # If this isn't the first time this method has been called,
             # finalise any data which is waiting to be dealt with.
@@ -2906,8 +2906,6 @@ class _ElementwiseStreamsHandler(_StreamsHandler):
         return iteration_order
 
     def process_chunks(self, chunks):
-        print("wawar:", chunks)
-        print('Elementwise:', [chunk.keys for chunk in chunks])
         array = self.operator(*[chunk.data for chunk in chunks])
         chunk = Chunk(chunks[0].keys, array)
         return chunk

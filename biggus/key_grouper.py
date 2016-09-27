@@ -120,9 +120,6 @@ def group_keys(shape, *inputs_keys):
             if len(grouped_inputs_key) == 1:
                 continue
             else:
-                
-                print('g:', grouped_inputs_key)
-                print(grouped_inputs_keys)
                 # Drop the bigger group from the result dictionary and in its place,
                 # add all of the subgroups.
                 grouped_inputs_keys.pop(group_keys)
