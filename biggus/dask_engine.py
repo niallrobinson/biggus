@@ -7,6 +7,36 @@ import copy
 import uuid
 
 
+import biggus.key_grouper as key_grouper
+
+
+
+def filterfalse(predicate, iterable):
+    # filterfalse(lambda x: x%2, range(10)) --> 0 2 4 6 8
+    if predicate is None:
+        predicate = bool
+    for x in iterable:
+        if not predicate(x):
+            yield x
+
+def unique_everseen(iterable, key=None):
+    "List unique elements, preserving order. Remember all elements ever seen."
+    # unique_everseen('AAAABBBCCDAABBB') --> A B C D
+    # unique_everseen('ABBCcAD', str.lower) --> A B C D
+    seen = set()
+    seen_add = seen.add
+    if key is None:
+        for element in filterfalse(seen.__contains__, iterable):
+            seen_add(element)
+            yield element
+    else:
+        for element in iterable:
+            k = key(element)
+            if k not in seen:
+                seen_add(k)
+                yield element
+
+
 def array_id(array, iteration_order=None, masked=False):
     if iteration_order is None:
         iteration_order = range(array.ndim)
@@ -73,6 +103,12 @@ class DaskGroup(AllThreadedEngine.Group):
             all_chunks = list(groups_of_size(all_chunks, n_sources))
             process_result = None
             for chunks in all_chunks:
+#                 chunk,= chunks
+#                 if slice(2, 3) in chunk.keys:
+#                     import time
+#                     import random
+#                     time.sleep(random.randint(0, 10) / 10.)
+#                     print('DOING: ', chunks)
                 process_result = handler.process_chunks(chunks)
             result = handler.finalise()
             if result is None:
@@ -129,12 +165,9 @@ class DaskGroup(AllThreadedEngine.Group):
                 this_key = str(t_keys)
                 source_chunks_by_key.setdefault(this_key, []).append([chunk_id, task])
 
-        n_inputs = len(sources_keys)
-
-        import biggus.key_grouper as key_grouper
         sources_keys_grouped = key_grouper.group_keys(array.shape, *sources_keys)
+#         print('GROUPED:', sources_keys_grouped.keys())
         for slice_group, sources_keys_group in sources_keys_grouped.items():
-
             # Each group is entirely independent and can have its own task without knowledge
             # of results from items in other groups.
 
@@ -142,10 +175,14 @@ class DaskGroup(AllThreadedEngine.Group):
 
             all_chunks = []
             for input_i, (source_keys, source_chunks_by_key) in enumerate(zip(sources_keys_group, sources_chunks)):
-                dependencies = tuple(the_id
-                                     for source_key in source_keys
-                                     for the_id, task in source_chunks_by_key[str(source_key)])
+                #TODO: Uniquify source_keys.... (in key_grouper?)
+#                 unique_keys = set()
 
+                dependencies = tuple(the_id
+                                     for keys in source_keys
+                                     for the_id, task in source_chunks_by_key[str(keys)])
+                dependencies = tuple(unique_everseen(dependencies))
+#                 print('DEPS:', source_keys, dependencies)
                 def normalize_keys(keys, shape):
                     result = []
                     for key, dim_length in zip(keys, shape):
@@ -167,19 +204,20 @@ class DaskGroup(AllThreadedEngine.Group):
 
             pivoted = all_chunks
 
-            handler = array.streams_handler(masked)
+            sub_array = array[t_keys]
+            handler = sub_array.streams_handler(masked)
             name = getattr(handler, 'nice_name', handler.__class__.__name__)
-
+    
             if hasattr(handler, 'axis'):
                 name += '\n(axis={})'.format(handler.axis)
             # For ElementwiseStreams handlers, use the function that they wrap (e.g "add")
             if hasattr(handler, 'operator'):
                 name = handler.operator.__name__
-
+    
             n_sources = len(array.sources)
             handler_of_chunks_fn = self.create_chunks_handler_fn(handler, n_sources, name)
-
-            shape = array[t_keys].shape
+            
+            shape = sub_array.shape
             if all(key == slice(None) for key in t_keys):
                 subset = ''
             else:
@@ -188,7 +226,8 @@ class DaskGroup(AllThreadedEngine.Group):
 
             # Flatten out the pivot so that dask can dereferences the IDs
             source_chunks = [item for sublist in pivoted for item in sublist]
-
+#             if slice(2, 3) in t_keys:
+#                 print('SOurce chunks:', source_chunks)
             task = tuple([handler_of_chunks_fn, t_keys] + source_chunks)
             chunk_id = 'chunk shape: ({})\n\n{}{}'.format(', '.join(map(str, shape)),
                                                          subset, uuid.uuid4())
@@ -268,6 +307,8 @@ class DaskGroup(AllThreadedEngine.Group):
                 # TODO: Factor it so that this isn't necessary...
                 if isinstance(chunks, biggus._init.Chunk):
                     chunks = [chunks]
+#                 import inspect
+#                 print('FOO:', inspect.currentframe().f_code.co_name, type(chunks), chunks)
                 result_node.process_chunks(chunks)
             result_array = result_node.result
             if chunk:
@@ -286,9 +327,9 @@ class DaskGroup(AllThreadedEngine.Group):
         for array in self.arrays:
             self.dask_task(dsk_graph, array, masked=masked, top=True)
             array_id_val = array_id(array, masked=masked)
-            dependencies = list(self._node_cache[array_id_val].keys())
+            dependencies = tuple(self._node_cache[array_id_val].keys())
             if array_id_val not in dsk_graph:
-                dsk_graph[array_id_val] = (self.collect(array, masked), dependencies)
+                dsk_graph[array_id_val] = (self.collect(array, masked),) + dependencies
 
         return dsk_graph
 
@@ -339,7 +380,29 @@ if __name__ == '__main__':
     biggus.engine = e
     # TODO: Make this smaller and have the tests pass!
 #     biggus._init.MAX_CHUNK_SIZE = 4 * 8# * 1024 * 1000
+    biggus._init.MAX_CHUNK_SIZE = 8
+#     biggus._init.MAX_CHUNK_SIZE = 32//8*10-1
 
+    if True:
+        axis = 0
+        data = np.arange(3 * 4 * 5, dtype='f4').reshape(3, 4, 5)
+        array = biggus.NumpyArrayAdapter(data)
+        mean = biggus.mean(array, axis=axis)
+        expr = mean
+        graph = e.graph(expr)
+        pprint(graph)
+        dask.dot.dot_graph(graph)
+        from dask.callbacks import Callback
+        class PrintKeys(Callback):
+            def _posttask(self, key, result, dsk, state, worker_id):
+                """Print the key of every task as it's started"""
+                if isinstance(result, biggus._init.Chunk) and slice(2, 3) in result.keys:
+                    print("Computing: {0}!".format(repr(key)), result)
+        with PrintKeys():
+            op_result, = biggus.ndarrays([mean])
+        np_result = np.mean(data, axis=axis)
+        np.testing.assert_array_almost_equal(op_result, np_result)
+#         exit(0)
     if True:
         shape = (6,)
         a_n = np.zeros(shape)
