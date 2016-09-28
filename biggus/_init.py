@@ -156,7 +156,7 @@ class ProducerNode(Node):
     def chunk_index_gen(shape, iteration_order):
         # We always slice up the Array into the same chunks, but
         # the order that we traverse those chunks depends on
-        # `self.iteration_order`.
+        # `iteration_order`.
         # We use `numpy.ndindex` to iterate through all the chunks,
         # but since it always iterates over the last dimension first
         # we have to transpose `all_cuts` and `cut_shape` ourselves.
@@ -2188,6 +2188,13 @@ def save(sources, targets, masked=False):
 
 
 class _StreamsHandler(six.with_metaclass(ABCMeta, object)):
+    """
+    A streams handler is an object who is responsible for transforming array chunks
+    and gathering these together into the desired form. Examples of Streams handling
+    include simple transformations such as changing the datatype, right through to
+    more complex transformations such as computing a mean of the chunks seen.
+
+    """
     @abstractmethod
     def finalise(self):
         """
@@ -2238,7 +2245,7 @@ class _AggregationStreamsHandler(_StreamsHandler):
         """
         Given input chunk keys, compute what keys will be needed to put
         the result into the result array.
-        
+
         As an example of where this gets used - when we aggregate on a particular axis,
         the source keys may be (0:2, None:None), but for an aggregation on axis 0, they would
         result in target values on dimension 2 only and so be (None: None, )
@@ -2248,7 +2255,10 @@ class _AggregationStreamsHandler(_StreamsHandler):
         del keys[self.axis]
         return tuple(keys)
 
-    # TODO: Implement a shape processor too.
+    def output_shape(self, input_shape):
+        shape = list(input_shape)
+        del shape[self.axis]
+        return tuple(shape)
 
     def process_chunks(self, chunks):
         chunk, = chunks
@@ -2264,8 +2274,7 @@ class _AggregationStreamsHandler(_StreamsHandler):
                 result = self.finalise()
 
             # Setup the processing of this new chunk.
-            shape = list(chunk.data.shape)
-            del shape[self.axis]
+            shape = self.output_shape(chunk.data.shape)
             self.bootstrap(shape)
             self.current_keys = keys
         self.process_data(chunk.data)

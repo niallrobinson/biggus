@@ -103,12 +103,6 @@ class DaskGroup(AllThreadedEngine.Group):
             all_chunks = list(groups_of_size(all_chunks, n_sources))
             process_result = None
             for chunks in all_chunks:
-#                 chunk,= chunks
-#                 if slice(2, 3) in chunk.keys:
-#                     import time
-#                     import random
-#                     time.sleep(random.randint(0, 10) / 10.)
-#                     print('DOING: ', chunks)
                 process_result = handler.process_chunks(chunks)
             result = handler.finalise()
             if result is None:
@@ -174,15 +168,14 @@ class DaskGroup(AllThreadedEngine.Group):
             t_keys = tuple(slice(*slice_tuple) for slice_tuple in slice_group)
 
             all_chunks = []
-            for input_i, (source_keys, source_chunks_by_key) in enumerate(zip(sources_keys_group, sources_chunks)):
-                #TODO: Uniquify source_keys.... (in key_grouper?)
-#                 unique_keys = set()
+            for source_keys, source_chunks_by_key in zip(sources_keys_group, sources_chunks):
 
                 dependencies = tuple(the_id
                                      for keys in source_keys
                                      for the_id, task in source_chunks_by_key[str(keys)])
+                # Uniquify source_keys, but keep the order.
                 dependencies = tuple(unique_everseen(dependencies))
-#                 print('DEPS:', source_keys, dependencies)
+
                 def normalize_keys(keys, shape):
                     result = []
                     for key, dim_length in zip(keys, shape):
@@ -207,16 +200,16 @@ class DaskGroup(AllThreadedEngine.Group):
             sub_array = array[t_keys]
             handler = sub_array.streams_handler(masked)
             name = getattr(handler, 'nice_name', handler.__class__.__name__)
-    
+
             if hasattr(handler, 'axis'):
                 name += '\n(axis={})'.format(handler.axis)
             # For ElementwiseStreams handlers, use the function that they wrap (e.g "add")
             if hasattr(handler, 'operator'):
                 name = handler.operator.__name__
-    
+
             n_sources = len(array.sources)
             handler_of_chunks_fn = self.create_chunks_handler_fn(handler, n_sources, name)
-            
+
             shape = sub_array.shape
             if all(key == slice(None) for key in t_keys):
                 subset = ''
@@ -365,226 +358,4 @@ class DaskEngine(Engine):
         # TODO: Return a dask.base.Base instance (of this dict). We then get nice methods...
         return self._daskify(arrays)
 
-
-if __name__ == '__main__':
-    # Put the sys prefix directory on the path.
-    import os, sys
-    os.environ['PATH'] += ':{}/bin'.format(sys.prefix)
-
-    import biggus
-    from dask.multiprocessing import get
-    import dask.dot
-    from pprint import pprint
-
-    e = DaskEngine()
-    biggus.engine = e
-    # TODO: Make this smaller and have the tests pass!
-#     biggus._init.MAX_CHUNK_SIZE = 4 * 8# * 1024 * 1000
-    biggus._init.MAX_CHUNK_SIZE = 8
-#     biggus._init.MAX_CHUNK_SIZE = 32//8*10-1
-
-    if True:
-        axis = 0
-        data = np.arange(3 * 4 * 5, dtype='f4').reshape(3, 4, 5)
-        array = biggus.NumpyArrayAdapter(data)
-        mean = biggus.mean(array, axis=axis)
-        expr = mean
-        graph = e.graph(expr)
-        pprint(graph)
-        dask.dot.dot_graph(graph)
-        from dask.callbacks import Callback
-        class PrintKeys(Callback):
-            def _posttask(self, key, result, dsk, state, worker_id):
-                """Print the key of every task as it's started"""
-                if isinstance(result, biggus._init.Chunk) and slice(2, 3) in result.keys:
-                    print("Computing: {0}!".format(repr(key)), result)
-        with PrintKeys():
-            op_result, = biggus.ndarrays([mean])
-        np_result = np.mean(data, axis=axis)
-        np.testing.assert_array_almost_equal(op_result, np_result)
-#         exit(0)
-    if True:
-        shape = (6,)
-        a_n = np.zeros(shape)
-        a = biggus.zeros(shape)
-        b_n = np.zeros([shape[0], shape[0]])
-        b = biggus.zeros([shape[0], shape[0]])
-
-        c = biggus.mean(b, axis=1)
-        d = a - c
-
-        expected = (a_n - b_n.mean(axis=1)) + 1
-        expr = d + 1
-
-        graph = e.graph(expr)
-
-        pprint(graph)
-        dask.dot.dot_graph(graph)
-
-        r = e.ndarrays(expr)
-        print(r)
-#         np.testing.assert_array_equal(r, expected)
-    exit(0)
-    print('-' * 80)
-
-    if True:
-        a = biggus.zeros([8, 2, 2])
-        add = a + 1
-        b = biggus.mean(a - a, axis=0)
-        m = biggus.mean(a, axis=0)
-        m1 = biggus.var(add, axis=1)
-        s = biggus.std(a, axis=0)
-        delta = add - m
-
-    #     print e._daskify(a)
-    #     print pprint(e.graph(a + 1))
-    #     print pprint(e.ndarrays(a + 1, a - 1))
-    #     print pprint(e.ndarrays(biggus.mean(a, axis=0)))
-        arr = biggus.mean(a + 1, axis=0)
-
-        expr = add
-        graph = e.graph(expr, b, s, s, m, delta)
-        graph = e.graph(expr)
-
-        dask.dot.dot_graph(graph)
-        pprint(graph)
-        print(e.ndarrays(delta)[0].shape)
-    
-#     exit(0)
-    print('-' * 80)
-    
-    if True:
-        a = biggus.ConstantArray((2, 5))
-        expr = (a/3.) + a - (a * 2)
-        
-        graph = e.graph(expr)
-
-        dask.dot.dot_graph(graph)
-        pprint(graph)
-        print(e.ndarrays(add)[0].shape)
-    
-    if True:
-        shape = (500, 30, 40)
-        size = np.prod(shape)
-        raw_data = np.linspace(0, 1, num=size).reshape(shape)
-        counter = raw_data
-        array = biggus.NumpyArrayAdapter(counter)
-        mean_array = biggus.mean(array, axis=0)
-        std_array = biggus.std(array, axis=0)
-        graph = e.graph(mean_array, std_array)
-        dask.dot.dot_graph(graph)
-    print('-' * 80)
-    
-    if True:
-        
-        import numpy.testing
-        axis = 0
-        data = np.arange(3 * 4 * 2, dtype='f4').reshape(3, 4, -1)
-        array = biggus.NumpyArrayAdapter(data)
-        mean = biggus.mean(array, axis=axis)
-        
-        graph = e.graph(mean)
-        dask.dot.dot_graph(graph)
-        pprint(graph)
-    
-        op_result, = biggus.ndarrays([mean])
-        np_result = np.mean(data, axis=axis)
-        print(op_result)
-        print(np_result)
-    
-    
-        import dask.threaded
-        dask_getter = dask.threaded.get
-        targets = sorted(graph.keys())
-        results = dask_getter(graph, targets)
-        pprint(dict(zip(targets, results)))
-    
-        np.testing.assert_array_almost_equal(op_result, np_result)
-
-
-    if True:
-        dtype = np.float32
-
-        def _biggus_filter(data, weights):
-            # Filter a data array (time, <other dimensions>) using information in
-            # weights dictionary.
-            #
-            # Args:
-            #
-            # * data:
-            #     biggus array of the data to be filtered
-            # * weights:
-            #     dictionary of absolute record offset : weight
-    
-            # Build filter_matrix (time to time' mapping).
-            shape = data.shape
-    
-            # Build filter matrix as a numpy array and then populate.
-            filter_matrix_np = np.zeros((shape[0], shape[0])).astype(dtype)
-    
-            for offset, value in weights.items():
-                filter_matrix_np += np.diag([value] * (shape[0] - offset),
-                                            k=offset)
-                if offset > 0:
-                    filter_matrix_np += np.diag([value] * (shape[0] - offset),
-                                                k=-offset)
-    
-            # Create biggus array for filter matrix, adding in other dimensions.
-            for _ in shape[1:]:
-                filter_matrix_np = filter_matrix_np[..., np.newaxis]
-    
-            filter_matrix_bg_single = biggus.NumpyArrayAdapter(filter_matrix_np)
-    
-            # Broadcast to correct shape (time, time', lat, lon).
-            filter_matrix_bg = biggus.BroadcastArray(
-                filter_matrix_bg_single, {i+2: j for i, j in enumerate(shape[1:])})
-    
-            # Broadcast filter to same shape.
-            biggus_data_for_filter = biggus.BroadcastArray(data[np.newaxis, ...],
-                                                           {0: shape[0]})
-    
-            # Multiply two arrays together and sum over second time dimension.
-            filtered_data = biggus.sum(biggus_data_for_filter * filter_matrix_bg,
-                                       axis=1)
-    
-            # Cut off records at start and end of output array where the filter
-            # cannot be fully applied.
-            filter_halfwidth = len(weights) - 1
-            filtered_data = filtered_data[filter_halfwidth:-filter_halfwidth]
-    
-            return filtered_data
-
-        def test__biggus_filter():
-            shape = (1451, 1, 1)
-    
-            # Generate dummy data as biggus array.
-            numpy_data = np.random.random(shape).astype(dtype)
-            biggus_data = biggus.NumpyArrayAdapter(numpy_data)
-    
-            # Information for filter...
-            # Dictionary of weights: key = offset (absolute value), value = weight
-            weights = {0: 0.4, 1: 0.2, 2: 0.1}
-            # This is equivalent to a weights array of [0.1, 0.2, 0.4, 0.2, 0.1].
-            filter_halfwidth = len(weights) - 1
-    
-            # Filter data
-            filtered_biggus_data = _biggus_filter(biggus_data, weights)
-    
-            # Extract eddy component (original data - filtered data).
-            eddy_biggus_data = (biggus_data[filter_halfwidth:-filter_halfwidth] -
-                                filtered_biggus_data)
-    
-            # Aggregate over time dimension.
-            mean_eddy_biggus_data = biggus.mean(eddy_biggus_data, axis=0)
-    
-            graph = e.graph(mean_eddy_biggus_data)
-            pprint(graph)
-            dask.dot.dot_graph(graph)
-            # Force evaluation.
-            mean_eddy_numpy_data = mean_eddy_biggus_data.ndarray()
-    
-            # Confirm correct shape.
-            np.testing.assert_array_equal(mean_eddy_numpy_data.shape, shape[1:])
-
-        test__biggus_filter()
 
