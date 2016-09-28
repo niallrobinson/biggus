@@ -25,7 +25,7 @@ import unittest
 import numpy as np
 
 import biggus
-from biggus._dask_engine import DaskEngine
+from biggus.dask_engine import DaskEngine
 
 
 class DISABLED_Test_key_names(unittest.TestCase):
@@ -90,7 +90,10 @@ class Test__make_nodes(unittest.TestCase):
     @contextmanager
     def patched_make_nodes(self):
         import mock
-        with mock.patch('uuid.uuid4', self.fake_uuid().next):
+        u = self.fake_uuid()
+        from functools import partial
+        new_uuid = partial(next, u)
+        with mock.patch('uuid.uuid4', new_uuid):
             yield self.grp._make_nodes
 
     def assertNodesEqual(self, expected, actual, bullet_dodge=slice(1, None, 2)):

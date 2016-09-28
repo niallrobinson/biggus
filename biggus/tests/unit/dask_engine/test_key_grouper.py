@@ -130,6 +130,8 @@ class Test_group_keys(unittest.TestCase):
                 return keys
         self.ind = Foo()
         self.maxDiff = None
+        self.sorted_keys = lambda dkeys: sorted(dkeys.keys(),
+                                                key=lambda key: str(key))
 
     def test_one_group(self):
         colon = self.ind[:]
@@ -151,7 +153,7 @@ class Test_group_keys(unittest.TestCase):
              ((4, None, None), (None, None, None)): ([(self.ind[4:], colon)],
                                                      [(self.ind[4:], colon)]),
              }
-        self.assertEqual(sorted(e.keys()), sorted(r.keys()))
+        self.assertEqual(self.sorted_keys(e), self.sorted_keys(r))
         self.assertEqual(e, r)
 
     def test_one_input(self):
@@ -162,7 +164,7 @@ class Test_group_keys(unittest.TestCase):
         e = {((None, 2, None), (None, None, None)): ([(self.ind[:2], colon)],),
              ((2, 4, None), (None, None, None)): ([(self.ind[2:4], colon)],),
              ((4, None, None), (None, None, None)): ([(self.ind[4:], colon)],)}
-        self.assertEqual(sorted(e.keys()), sorted(r.keys()))
+        self.assertEqual(self.sorted_keys(e), self.sorted_keys(r))
         self.assertEqual(e, r)
 
     def test_one_input_one_dim(self):
@@ -170,7 +172,7 @@ class Test_group_keys(unittest.TestCase):
         e = {((None, 5, None),): ([(slice(0, 5, None),)],),
              ((5, None, None),): ([(slice(5, 6, None), )],)
              }
-        self.assertEqual(sorted(e.keys()), sorted(r.keys()))
+        self.assertEqual(self.sorted_keys(e), self.sorted_keys(r))
         self.assertEqual(e, r)
 
 

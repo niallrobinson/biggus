@@ -1,14 +1,12 @@
-from biggus import *
-from biggus._init import Engine
-import biggus._init
-import numpy as np
 import collections
 import copy
 import uuid
 
+import numpy as np
 
+import biggus
+from biggus._init import Engine
 import biggus.key_grouper as key_grouper
-
 
 
 def filterfalse(predicate, iterable):
@@ -78,7 +76,7 @@ def slice_repr(slice_instance):
     return msg
 
 
-class DaskGroup(AllThreadedEngine.Group):
+class DaskGroup(biggus._init.AllThreadedEngine.Group):
     def __init__(self, arrays):
         self.arrays = arrays
         self._node_cache = {}
@@ -357,5 +355,3 @@ class DaskEngine(Engine):
     def graph(self, *arrays):
         # TODO: Return a dask.base.Base instance (of this dict). We then get nice methods...
         return self._daskify(arrays)
-
-
